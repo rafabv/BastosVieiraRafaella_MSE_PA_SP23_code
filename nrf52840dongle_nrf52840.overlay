@@ -1,0 +1,71 @@
+/*
+ * Copyright (c) 2019 Peter Bigot Consulting, LLC
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+ 
+ //Code to change partitions size
+ /*/delete-node/ &scratch_partition;
+ /delete-node/ &slot0_partition;*/
+ /{
+
+
+
+	chosen {
+		nordic,nus-uart = &uart0;
+		zephyr,shell-uart = &uart1;
+	};
+
+
+};
+
+ &pinctrl {
+    uart1_dfu: uart1_dfu {
+		group1 {
+			psels = <NRF_PSEL(UART_RX, 0, 15)>,
+		   <NRF_PSEL(UART_CTS, 0, 1)>,
+		   <NRF_PSEL(UART_RTS, 0, 0)>;
+			//bias-disable;
+		};
+		group2 {
+			psels = <NRF_PSEL(UART_TX, 0, 13)>;
+			//bias-disable;
+		};
+	};
+
+	uart1_default: uart1_default {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 0, 15)>, <NRF_PSEL(UART_RX, 0, 13)>;
+		};
+	};
+};
+
+
+
+
+/ {
+	fstab {
+		compatible = "zephyr,fstab";
+		lfs1: lfs1 {
+			label = "storagedutprogram";
+			compatible = "zephyr,fstab,littlefs";
+			mount-point = "/lfs1";
+			partition = <&slot1_partition>; // storage place changed to have enough space
+			//automount;
+			read-size = <16>;
+			prog-size = <16>;
+			cache-size = <64>;
+			lookahead-size = <32>;
+			block-cycles = <512>; 
+		};
+	};
+};
+
+
+&uart1 {
+	status = "okay";
+	pinctrl-0 = <&uart1_default>;
+	current-speed = < 9600 >;
+	parity = "even";
+	pinctrl-names = "default";
+};

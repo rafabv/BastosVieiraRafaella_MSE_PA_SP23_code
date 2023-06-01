@@ -1,0 +1,61 @@
+# Copyright (c) 2019 Peter Bigot Consulting, LLC
+# SPDX-License-Identifier: Apache-2.0
+
+
+mainmenu "littlefs sample"
+
+config APP_WIPE_STORAGE
+	bool "Option to clear the flash area before mounting"
+	help
+	  Use this to force an existing file system to be created.
+
+choice
+	prompt "Storage backend type used by the application"
+	default APP_LITTLEFS_STORAGE_FLASH
+	help
+	  Specify the type of storage backend.
+
+config APP_LITTLEFS_STORAGE_FLASH
+	bool "Use flash memory backend"
+
+config APP_LITTLEFS_STORAGE_BLK_SDMMC
+	bool "Use block device (e.g. SD MMC) backend"
+endchoice
+
+menu "Nordic UART BLE GATT service sample"
+
+config BT_NUS_THREAD_STACK_SIZE
+	int "Thread stack size"
+	default 1024
+	help
+	  Stack size used in each of the two threads
+
+config BT_NUS_UART_BUFFER_SIZE
+	int "UART payload buffer element size"
+	default 40
+	help
+	  Size of the payload buffer in each RX and TX FIFO element
+
+config BT_NUS_SECURITY_ENABLED
+	bool "Enable security"
+	default y
+	select BT_SMP
+	help
+	  "Enable BLE security for the UART service"
+
+config BT_NUS_UART_RX_WAIT_TIME
+	int "Timeout for UART RX complete event"
+	default 50
+	help
+	  Wait for RX complete event time in milliseconds
+
+config BT_NUS_UART_ASYNC_ADAPTER
+	bool "Enable UART async adapter"
+	select SERIAL_SUPPORT_ASYNC
+	help
+	  Enables asynchronous adapter for UART drives that supports only
+	  IRQ interface.
+
+endmenu
+
+source "Kconfig.zephyr"

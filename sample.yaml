@@ -1,0 +1,75 @@
+sample:
+  name: littlefs filesystem sample
+tests:
+  sample.filesystem.littlefs:
+    build_only: true
+    platform_allow: nrf52840dk_nrf52840 particle_xenon disco_l475_iot1
+      mimxrt685_evk_cm33 mimxrt1060_evk mimxrt1064_evk qemu_x86 native_posix
+      mimxrt1160_evk_cm7
+    tags: filesystem
+    integration_platforms:
+      - nrf52840dk_nrf52840
+sample:
+  description: Bluetooth Low Energy UART service sample
+  name: BLE UART service
+tests:
+  sample.bluetooth.peripheral_uart:
+    build_only: true
+    platform_allow: nrf52dk_nrf52832 nrf52833dk_nrf52833 nrf52840dk_nrf52840
+      nrf5340dk_nrf5340_cpuapp nrf5340dk_nrf5340_cpuapp_ns thingy53_nrf5340_cpuapp
+      thingy53_nrf5340_cpuapp_ns nrf21540dk_nrf52840
+    integration_platforms:
+      - nrf52dk_nrf52832
+      - nrf52833dk_nrf52833
+      - nrf52840dk_nrf52840
+      - nrf5340dk_nrf5340_cpuapp
+      - nrf5340dk_nrf5340_cpuapp_ns
+      - thingy53_nrf5340_cpuapp
+      - thingy53_nrf5340_cpuapp_ns
+      - nrf21540dk_nrf52840
+    tags: bluetooth ci_build
+  sample.bluetooth.peripheral_uart_cdc:
+    build_only: true
+    extra_args: OVERLAY_CONFIG=prj_cdc.conf DTC_OVERLAY_FILE="usb.overlay"
+    integration_platforms:
+      - nrf52840dk_nrf52840
+      - nrf52833dk_nrf52833
+    platform_allow: nrf52840dk_nrf52840 nrf52833dk_nrf52833
+    tags: bluetooth ci_build
+  sample.bluetooth.peripheral_uart_minimal:
+    build_only: true
+    extra_args: OVERLAY_CONFIG=prj_minimal.conf
+    integration_platforms:
+      - nrf52dk_nrf52810
+      - nrf52840dk_nrf52811
+      - nrf52833dk_nrf52820
+    platform_allow: nrf52dk_nrf52810 nrf52840dk_nrf52811 nrf52833dk_nrf52820
+    tags: bluetooth ci_build
+  sample.bluetooth.peripheral_uart_ble_rpc:
+    build_only: true
+    extra_configs:
+      - CONFIG_BT_RPC_STACK=y
+    integration_platforms:
+      - nrf5340dk_nrf5340_cpuapp
+    platform_allow: nrf5340dk_nrf5340_cpuapp
+    tags: bluetooth ci_build
+  sample.bluetooth.peripheral_uart.security_disabled:
+    build_only: true
+    platform_allow: nrf52dk_nrf52832 nrf52833dk_nrf52833 nrf52840dk_nrf52840
+      nrf5340dk_nrf5340_cpuapp nrf5340dk_nrf5340_cpuapp_ns thingy53_nrf5340_cpuapp
+      thingy53_nrf5340_cpuapp_ns nrf21540dk_nrf52840
+    integration_platforms:
+      - nrf52840dk_nrf52840
+    tags: bluetooth ci_build
+    extra_configs:
+      - CONFIG_BT_NUS_SECURITY_ENABLED=n
+sample:
+  name: UART driver sample
+tests:
+  sample.drivers.uart:
+    tags: serial uart
+    filter: CONFIG_SERIAL and
+            CONFIG_UART_INTERRUPT_DRIVEN and
+            dt_chosen_enabled("zephyr,shell-uart")
+            dt_chosen_enabled("zephyr,shell-uart1")
+    harness: keyboard
