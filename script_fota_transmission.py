@@ -100,12 +100,8 @@ async def uart_terminal():
             # property to split the data into chunks that will fit.
             
         fw = read_file()
-        print(fw)
         data = fw.getData()
-        print(type(data))
-        #data = list(data)
         data = bytearray(data)
-        print(len(data))
         #print(data)
         print("max : %d"%rx_char.max_write_without_response_size)
         #for s in sliced(data, rx_char.max_write_without_response_size):
