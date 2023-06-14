@@ -38,9 +38,15 @@
 
 #include "pins_handler.h"
 
+#include <zephyr/bluetooth/gap.h>
+#include <zephyr/bluetooth/addr.h>
+#include <zephyr/bluetooth/conn.h>
+#include <bluetooth/services/lbs.h>
+
 
 enum MenuMode{IDLE,START,GETID,ERASEMEM,PROGRAM,SAVEDATA};
 static enum MenuMode menu;
+
 
 
 /*LOG NAME*/
@@ -89,6 +95,7 @@ struct uart_data_t {
 
 static K_FIFO_DEFINE(fifo_uart_tx_data);
 static K_FIFO_DEFINE(fifo_uart_rx_data);
+static K_FIFO_DEFINE(fifo_uart_rx_transmit);
 
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
@@ -101,10 +108,18 @@ static const struct bt_data sd[] = {
 
 static void connected(struct bt_conn *conn, uint8_t err);
 static void disconnected(struct bt_conn *conn, uint8_t reason);
+static void update_mtu(struct bt_conn *conn);
+static void update_data_length(struct bt_conn *conn);
+void on_le_data_len_updated(struct bt_conn *conn, struct bt_conn_le_data_len_info *info);
+static void exchange_func(struct bt_conn *conn, uint8_t att_err,
+			  struct bt_gatt_exchange_params *params);
+
+static struct bt_gatt_exchange_params exchange_params;
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected    = connected,
 	.disconnected = disconnected,
+	.le_data_len_updated    = on_le_data_len_updated,
 };
 
 static void bt_receive_cb(struct bt_conn *conn, const uint8_t *const data, uint16_t len);
@@ -115,10 +130,10 @@ static struct bt_nus_cb nus_cb = {
 
 /*LITTLEFS CONFIG*/
 #define MAX_PATH_LEN 	255
-#define SIZE_PACK_BLE 	100
+#define SIZE_PACK_BLE 	241
 #define READ_SIZE 		7680 // 256 (size of a page) * 30 (number of pages)
 
-static uint8_t data_receive_ble[SIZE_PACK_BLE];
+static uint8_t data_receive_ble[SIZE_PACK_BLE-1];
 static uint8_t file_read[READ_SIZE];
 
 char fname[MAX_PATH_LEN];
@@ -179,6 +194,16 @@ static int lsdir(const char *path)
 	return res;
 }
 
+void open_file(){
+	int rc;
+	fs_file_t_init(&file);
+	rc = fs_open(&file, fname, FS_O_CREATE | FS_O_RDWR);
+	if (rc < 0) {
+		LOG_ERR("FAIL: open %s: %d", fname, rc);
+		return rc;
+	}
+}
+
 static void save_data(uint8_t *p, struct uart_data_t *tx)
 {
 	struct fs_dirent dirent;
@@ -200,12 +225,8 @@ static void save_data(uint8_t *p, struct uart_data_t *tx)
 	/*If the first byte is command 0x80 - Reset file*/
 	if(tx->data[0] == 0x80){
 		fs_unlink(fname);
-		fs_file_t_init(&file);
-		rc = fs_open(&file, fname, FS_O_CREATE | FS_O_RDWR);
-		if (rc < 0) {
-			LOG_ERR("FAIL: open %s: %d", fname, rc);
-			return rc;
-		}	
+		open_file();
+
 	}
 
 /* 	rc = fs_stat(fname, &dirent);
@@ -213,12 +234,15 @@ static void save_data(uint8_t *p, struct uart_data_t *tx)
 		LOG_ERR("FAIL: stat %s: %d", fname, rc);
 	} */
 
-	for(i = 1;i<61;i++){
+	for(i = 1;i<SIZE_PACK_BLE;i++){
 		data_receive_ble[i-1]=tx->data[i];
 	}
 
-	//printk("------ FILE: %s ------\n", fname);
-	//print_file(data_receive_ble, sizeof(data_receive_ble));
+	//code for debug
+	/* if(nbytes >= 73440){
+		printk("------ FILE: %s ------\n", fname);
+		print_file(data_receive_ble, sizeof(data_receive_ble));
+	} */
 
 	//printk("fs_tell : %d\n",fs_tell(&file));
 	//printk("offset  : %d\n",offset);
@@ -227,7 +251,7 @@ static void save_data(uint8_t *p, struct uart_data_t *tx)
 		LOG_ERR("FAIL: seek %s: %d", fname, rc);
 	}
 	
-	rc = fs_write(&file, data_receive_ble, (tx->len-1));
+	rc = fs_write(&file, data_receive_ble, sizeof(data_receive_ble));
 	if (rc < 0) {
 		LOG_ERR("FAIL: write %s: %d", fname, rc);
 	}
@@ -314,25 +338,35 @@ static int littlefs_mount(struct fs_mount_t *mp)
 	return 0;
 }
 
-void littlefs_init(){
-	struct fs_statvfs sbuf;
+void mount_point(){
 	int rc;
-
-	printk("Sample program to r/w files on littlefs\n");
 	rc = littlefs_mount(mp);
 	if (rc < 0) {
 		return;
 	}
+}
+
+void littlefs_init(){
+	struct fs_statvfs sbuf;
+	int rc;
+
+	//printk("Sample program to r/w files on littlefs\n");
+	/* rc = littlefs_mount(mp);
+	if (rc < 0) {
+		return;
+	} */
+	mount_point();
 
 	snprintf(fname, sizeof(fname), "%s/data.bin", mp->mnt_point);
 
-	fs_file_t_init(&file);
+	/* fs_file_t_init(&file);
 
 	rc = fs_open(&file, fname, FS_O_CREATE | FS_O_RDWR);
 	if (rc < 0) {
 		LOG_ERR("FAIL: open %s: %d", fname, rc);
 		return rc;
-	}	
+	} */	
+	open_file();
 
 	//read mem
 	rc = fs_read(&file, file_read, sizeof(file_read));
@@ -340,8 +374,8 @@ void littlefs_init(){
 		LOG_ERR("FAIL: read %s: [rd:%d]", fname, rc);
 		
 	}
-	printk("------ FILE MEM: %s ------\n", fname);
-	print_file(file_read, sizeof(file_read));
+	//printk("------ FILE MEM: %s ------\n", fname);
+	//print_file(file_read, sizeof(file_read));
 
 	rc = fs_statvfs(mp->mnt_point, &sbuf);
 	if (rc < 0) {
@@ -366,7 +400,7 @@ void littlefs_init(){
 		LOG_ERR("FAIL: seek %s: %d", fname, rc);
 	}
 	nbytes = fs_tell(&file);
-	printk("nbytes: %d \r\n",nbytes);
+	//printk("nbytes: %d \r\n",nbytes);
 
 }
 
@@ -607,6 +641,48 @@ int uart_init(void)
 	return err;
 }
 
+static void update_data_length(struct bt_conn *conn)
+{
+    int err;
+    struct bt_conn_le_data_len_param my_data_len = {
+        .tx_max_len = BT_GAP_DATA_LEN_MAX,
+        .tx_max_time = BT_GAP_DATA_TIME_MAX,
+    };
+    err = bt_conn_le_data_len_update(current_conn, &my_data_len);
+    if (err) {
+        LOG_ERR("data_len_update failed (err %d)", err);
+    }
+}
+
+static void update_mtu(struct bt_conn *conn)
+{
+    int err;
+    exchange_params.func = exchange_func;
+
+    err = bt_gatt_exchange_mtu(conn, &exchange_params);
+    if (err) {
+        LOG_ERR("bt_gatt_exchange_mtu failed (err %d)", err);
+    }
+}
+
+void on_le_data_len_updated(struct bt_conn *conn, struct bt_conn_le_data_len_info *info)
+{
+    uint16_t tx_len     = info->tx_max_len; 
+    uint16_t tx_time    = info->tx_max_time;
+    uint16_t rx_len     = info->rx_max_len;
+    uint16_t rx_time    = info->rx_max_time;
+    LOG_INF("Data length updated. Length %d/%d bytes, time %d/%d us", tx_len, rx_len, tx_time, rx_time);
+}
+static void exchange_func(struct bt_conn *conn, uint8_t att_err,
+			  struct bt_gatt_exchange_params *params)
+{
+	LOG_INF("MTU exchange %s", att_err == 0 ? "successful" : "failed");
+    if (!att_err) {
+        uint16_t payload_mtu = bt_gatt_get_mtu(conn) - 3;   // 3 bytes used for Attribute headers.
+        LOG_INF("New MTU: %d bytes", payload_mtu);
+    }
+}
+
 static void connected(struct bt_conn *conn, uint8_t err)
 {
 	char addr[BT_ADDR_LE_STR_LEN];
@@ -620,6 +696,9 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	LOG_INF("Connected %s", addr);
 
 	current_conn = bt_conn_ref(conn);
+
+	update_data_length(current_conn);
+	update_mtu(current_conn);
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
@@ -641,15 +720,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 		current_conn = NULL;
 	}
 
-	printk("------ FLASH : START ------\n");
-	start();
-	printk("------ FLASH : ERASE ------\n");
-	printk("fs_tell : %d\n",fs_tell(&file));
-	erase_flash_dut();
-	printk("------ FLASH : PROGRAM ------\n");
-	program_dut();
-	boot_activation(false);
-	reset_stm();
+
 }
 
 static void bt_receive_cb(struct bt_conn *conn, const uint8_t *const data,
@@ -693,14 +764,21 @@ static void bt_receive_cb(struct bt_conn *conn, const uint8_t *const data,
 
 		//uart print
 		/* err = uart_tx(uart, tx->data, tx->len, SYS_FOREVER_MS);
-		printk(" \n"); */
-		/* if (err) {
+		printk(" \n"); 
+		if (err) {
 			k_fifo_put(&fifo_uart_tx_data, tx);
-		} */
+		} */ 
 
 		//write on flash
-		save_data(fname,tx);
-
+		if(tx->data[0] == 0x80 || tx->data[0] == 0x00){
+			menu = SAVEDATA;
+			save_data(fname,tx);
+		}
+		else if (tx->data[0] == 0xFF){
+			save_data(fname,tx);
+			close_and_unmount();
+			menu = START;
+		}
 		k_free(tx);
 
 	}
@@ -735,19 +813,31 @@ static void uart1_cb(const struct device *dev, struct uart_event *evt, void *use
 
 	switch (evt->type) {
 	case UART_RX_RDY:
-		//printk("UART_RX_RDY\n");
-		//printk("Response received : ");
-		for (int i = 0; i<evt->data.rx.len;i++){
-			uart1_response[i] = evt->data.rx.buf[evt->data.rx.offset];
-			//printk("%x",uart1_response[i]);
-		}
-		//printk("\n");
-		response = true;
+		if(menu == IDLE){
+			printk("debug log netris");
+			char txt[240];
+			for (int i = 0; i<evt->data.rx.len;i++){
+				txt[i] = evt->data.rx.buf[evt->data.rx.offset];
+				//printk("%x",uart1_response[i]);
+			}
 
+			if (bt_nus_send(NULL, txt, sizeof(txt))) {
+				LOG_WRN("Failed to send data over BLE connection");
+			}
+		}else{
+			//printk("UART_RX_RDY\n");
+			//printk("Response received : ");
+			for (int i = 0; i<evt->data.rx.len;i++){
+				uart1_response[i] = evt->data.rx.buf[evt->data.rx.offset];
+				//printk("%x",uart1_response[i]);
+			}
+			//printk("\n");
+			response = true;
+		}
 		break;
 
 	case UART_RX_DISABLED:
-		printk("UART_RX_DISABLED\n");
+		//printk("UART_RX_DISABLED\n");
 		uart_rx_enable(uart_dev1, rx_buf, sizeof(rx_buf),RECEIVE_TIMEOUT);
 		break;
 
@@ -759,7 +849,7 @@ static void uart1_cb(const struct device *dev, struct uart_event *evt, void *use
 void print_uart1(uint8_t buf)
 {
 	uart_tx(uart_dev1, &buf,sizeof(buf),SYS_FOREVER_MS);
-	k_msleep(1);
+	k_usleep(500);
 }
 
 void uart1_init(){
@@ -811,8 +901,9 @@ void start(){
 
 }
 
-void erase_flash_dut(){
+int erase_flash_dut(){
 
+	int ret;
 	uint8_t data[2];
 	uint16_t NpagesToErase;
 	uint8_t checksum;
@@ -823,7 +914,7 @@ void erase_flash_dut(){
 	print_uart1(data[1]); 
 	if(wait_ack("***ERASE MEM ACK***\r\n")){
 		//number of pages to erase on two bytes
-		NpagesToErase = 700; //256kB = 256(bytes in one page)*1000(number of pages)
+		NpagesToErase = 500; //256kB = 256(bytes in one page)*1000(number of pages)
 		data[0] = (NpagesToErase & 0xff00)>>8; 
 		data[1] = NpagesToErase & 0x00ff;
 		print_uart1(data[0]);
@@ -848,12 +939,24 @@ void erase_flash_dut(){
 
 		if(wait_ack("***GLOBAL ERASE ACK***\r\n")){
 			printk("Full memory erased \r\n");
+			ret =0;
 		}
 
 	}
 	//some delay to erase the flash 
-	k_msleep(1000);		
-	
+	k_msleep(1000);	
+	if(ret == 0){
+		char txt[50] = "Erase OK";
+
+		if (bt_nus_send(NULL, txt, sizeof(txt))) {
+			LOG_WRN("Failed to send data over BLE connection");
+		}
+	}
+	else{
+		ret = -1;
+	}
+
+	return ret;	
 }
 
 void program_dut(){
@@ -876,10 +979,10 @@ void program_dut(){
 	}
 
 	nbytes =fs_tell(&file);
-	printk("nbytes: %d\n",nbytes);
+	//printk("nbytes: %d\n",nbytes);
 
 	total_pages = (nbytes/256)+1;
-	printk("nbytes: %d\n",nbytes);
+	//printk("nbytes: %d\n",nbytes);
 
 	read_file_loop = (total_pages/pages_in_onefile)+1;
 	
@@ -972,50 +1075,69 @@ void program_dut(){
 			}
 		}
 	}
-	close_and_unmount();
+
+	
+	//close_and_unmount();
+	char txt[50] = "Programmation OK";
+
+	if (bt_nus_send(NULL, txt, sizeof(txt))) {
+		LOG_WRN("Failed to send data over BLE connection");
+	}
 }
 
 
 void main(void)
 {
 	pins_init();	
-	littlefs_init(); // LITTLEFS INIT
-	nus_init(); //UART0-BLE 
-	uart1_init(); //UART1
+	littlefs_init(); 	// LITTLEFS INIT
+	nus_init(); 		//UART0-BLE 
+	uart1_init(); 		//UART1
 
 	menu = IDLE;
-
-/* 	printk("------ FILE READ: ------\n");
-	print_file(file_read, sizeof(file_read)); */
- 	
-/*  	k_msleep(3000);
-	printk("------ FLASH : START ------\n");
-	start();
-	printk("------ FLASH : ERASE ------\n");
-	erase_flash_dut();
-	printk("------ FLASH : PROGRAM ------\n");
-	program_dut();  */
 
 	while(true){
 		switch (menu)
 		{
 		case IDLE:
 			/* code */
+			break;		
+		case START :	
+			boot_activation(true);
+			uart_rx_enable(uart_dev1, rx_buf, sizeof(rx_buf), RECEIVE_TIMEOUT);
+			printk("------ RESET BOARD ------\n");
+			k_msleep(3000);
+			printk("------ FLASH : START ------\n");
+			start();	
+			menu = ERASEMEM;
 			break;
-		case START:
-			/* code */
-			break;
-		case GETID:
-			/* code */
-			break;						
+
 		case ERASEMEM:
 			/* code */
+			printk("------ FLASH : ERASE ------\n");
+			if(erase_flash_dut()==0){
+				menu = PROGRAM;
+			}
+			else{
+				printk("Eror on erase\r\n");
+				menu = IDLE;
+			}
 			break;
+
 		case PROGRAM:
 			/* code */
+			printk("------ FLASH : PROGRAM ------\n");
+			littlefs_init();
+			program_dut();
+			boot_activation(false);
+			reset_stm();
+			close_and_unmount();
+			//uart_rx_disable(uart_dev1);
+			menu = IDLE;
+
 			break;						
 		case SAVEDATA:
 			/* code */
+			// code in the callback bt_receive_cb
 			break;			
 		default:
 			break;
